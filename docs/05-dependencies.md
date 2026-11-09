@@ -39,6 +39,50 @@
 
 > `cn-font-split` 是**可选但 Web 拆分必需**的外部依赖：`build.py` 不依赖它；只有运行 `split.py` 时才需要，缺失会抛 `RuntimeError`。
 
+### 依赖层次图
+
+```mermaid
+flowchart TB
+    subgraph L3["应用层（入口脚本）"]
+        BP["build.py"]
+        SP["split.py"]
+    end
+    subgraph L2["业务模块（src/）"]
+        CFG["config.py"]
+        MRG["merge.py"]
+        UTL["utils.py"]
+    end
+    subgraph L1["第三方 / 工具链"]
+        FT["fontTools"]
+        YM["PyYAML"]
+        NODE["cn-font-split"]
+        UV["uv / hatchling"]
+    end
+    subgraph L0["基础设施"]
+        PY["Python ≥ 3.10"]
+        NODEJS["Node.js（仅 split）"]
+        FS["文件系统（fonts/ / output/）"]
+    end
+
+    BP --> CFG
+    BP --> MRG
+    BP --> UTL
+    BP --> YM
+    SP --> CFG
+    SP --> NODE
+    MRG --> CFG
+    MRG --> UTL
+    MRG --> FT
+    UTL --> FT
+    L2 --> L1
+    L1 --> L0
+
+    style L0 fill:#5f1e1e,color:#fff
+    style L1 fill:#5f3a1e,color:#fff
+    style L2 fill:#1e3a5f,color:#fff
+    style L3 fill:#1e5f3a,color:#fff
+```
+
 ## 5.4 模块间依赖图
 
 ```mermaid
@@ -83,6 +127,39 @@ flowchart TD
 | LXGWZhenKaiGB-Regular.ttf | — | CJK（Bold/BoldItalic，笔画更重） | `fonts/` |
 
 仓库的 `fonts/` 目录当前已包含上述文件；缺失时 `build.py` 会在校验阶段报错退出。
+
+### 源字体到字重的映射关系（当前仓库）
+
+```mermaid
+flowchart LR
+    subgraph EN["JetBrains Mono NerdFont v3.4.0<br/>英文 + Nerd 图标"]
+        ER["Regular"]
+        EM["Medium"]
+        EI["Italic"]
+        EMI["MediumItalic"]
+        EB["Bold"]
+        EBI["BoldItalic"]
+    end
+
+    subgraph CJKWX["LXGW WenKai Mono GB Screen<br/>常规中文"]
+        WX["LXGWWenKaiMonoGBScreen.ttf"]
+    end
+
+    subgraph CJKZK["LXGW ZhenKai GB<br/>粗体中文"]
+        ZK["LXGWZhenKaiGB-Regular.ttf"]
+    end
+
+    ER -->|"cn_font"| WX
+    EM -->|"cn_font"| WX
+    EI -->|"cn_font"| WX
+    EMI -->|"cn_font"| WX
+    EB -->|"cn_font"| ZK
+    EBI -->|"cn_font"| ZK
+
+    style EN fill:#1e3a5f,color:#fff
+    style CJKWX fill:#3a1e5f,color:#fff
+    style CJKZK fill:#5f1e1e,color:#fff
+```
 
 ## 5.6 依赖与产物的关系
 

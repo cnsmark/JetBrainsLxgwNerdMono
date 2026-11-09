@@ -8,6 +8,38 @@ JetBrainsLxgwNerdMono 不是一款「设计」出来的字体，而是一条**�
 
 本项目通过 `fontTools` 在字形（glyph）级别做「取长补短」式的合并：
 
+```mermaid
+flowchart LR
+    subgraph A["JetBrains Mono NerdFont<br/>（基底字体）"]
+        A1["英文字母与数字<br/>A-Z a-z 0-9"]
+        A2["ASCII 标点与符号"]
+        A3["Nerd Font 图标<br/>Private Use Area"]
+    end
+
+    subgraph B["LXGW 霞鹜文楷<br/>（CJK 来源）"]
+        B1["汉字<br/>U+4E00–U+9FFF 及扩展 A–G"]
+        B2["CJK 标点<br/>【 《 「 ， 。"]
+        B3["全角/半角<br/>U+FF00–U+FFEF"]
+    end
+
+    M{{"merge_fonts<br/>scale_nerd_icons<br/>center_cjk_glyphs"}}
+
+    subgraph C["JetBrainsLxgwNerdMono<br/>（合并产物）"]
+        C1["英文 600 FUnit"]
+        C2["图标（缩放至 1200）"]
+        C3["CJK 1200 FUnit"]
+    end
+
+    A --> M
+    B --> M
+    M --> C
+
+    style A fill:#1e3a5f,color:#fff,stroke:#3b82f6
+    style B fill:#3a1e5f,color:#fff,stroke:#a855f7
+    style C fill:#1e5f3a,color:#fff,stroke:#22c55e
+    style M fill:#f59e0b,color:#111,stroke:#f59e0b,stroke-width:2px
+```
+
 | 内容类别 | 来源字体 | 处理方式 |
 | --- | --- | --- |
 | 英文字符 | JetBrains Mono NerdFont | 作为**基底字体**原样保留 |
@@ -15,6 +47,25 @@ JetBrainsLxgwNerdMono 不是一款「设计」出来的字体，而是一条**�
 | CJK 汉字与标点 | LXGW WenKai Mono GB Screen / LXGW ZhenKai GB | 拷贝字形、统一 UPM 缩放、设为 2 倍宽 |
 
 ## 1.2 核心特性
+
+```mermaid
+flowchart LR
+    subgraph 2to1["核心特性 · 2:1 等宽比示意"]
+        direction TB
+        E["英文宽 600 FUnit<br/>■■■■■■ 6格"]
+        C["CJK 宽 1200 FUnit<br/>■■■■■■■■■■■■ 12格"]
+        C -->|"= 2 × 英文"| E
+    end
+
+    subgraph icons["Nerd 图标处理"]
+        direction TB
+        I1["Powerline 符号<br/>U+E0A0–U+E0DF<br/>只水平居中 · 保持原始纵向"]
+        I2["普通图标<br/>PUA 其它区间<br/>1.4× 缩放 + 水平垂直双居中"]
+    end
+
+    style 2to1 fill:#0f172a,color:#e2e8f0,stroke:#64748b
+    style icons fill:#0f172a,color:#e2e8f0,stroke:#64748b
+```
 
 - **2:1 等宽比**：英文宽 `600` FUnit，CJK 宽 `1200` FUnit，保证终端/编辑器里「一个汉字 = 两个英文字符宽」，`|` 竖线完美对齐。
 - **Nerd Font 图标兼容**：私有使用区（PUA）图标被缩放至 CJK 宽度；其中 **Powerline 符号（U+E0A0–U+E0DF）保持原始纵向边界**，保证终端提示符箭头不错位。
@@ -39,6 +90,39 @@ JetBrainsLxgwNerdMono 不是一款「设计」出来的字体，而是一条**�
 | 前端验证 | 原生 HTML/CSS/JS（无框架） |
 
 ## 1.4 目录结构
+
+```mermaid
+flowchart TD
+    ROOT["/workspace"]
+    ROOT --> BP["build.py · 主构建入口"]
+    ROOT --> SP["split.py · Web 拆分入口"]
+    ROOT --> CG["config.yaml · 构建配置"]
+    ROOT --> PT["pyproject.toml + uv.lock"]
+    ROOT --> DF["Dockerfile"]
+    ROOT --> RD["README / README_zh"]
+    ROOT --> V1["verify-2-1.html · TTF 验证"]
+    ROOT --> V2["verify-2-1-split.html · WOFF2 验证"]
+
+    ROOT --> SRC["src/ · 核心包"]
+    SRC --> CFG["config.py<br/>FontConfig 数据类"]
+    SRC --> MRG["merge.py<br/>字形合并核心"]
+    SRC --> UTL["utils.py<br/>元数据 / 校验"]
+
+    ROOT --> FONTS["fonts/<br/>源字体（输入）"]
+    ROOT --> RES["resources/ · 文档配图"]
+
+    ROOT --> OUT["output/ · 构建产物（.gitignore）"]
+    OUT --> OTF["fonts/<br/>TTF + fonts-manifest.json"]
+    OUT --> OSP["split/<br/>WOFF2 子集 + CSS"]
+
+    style ROOT fill:#1e3a5f,color:#fff
+    style SRC fill:#1e5f3a,color:#fff
+    style FONTS fill:#5f3a1e,color:#fff
+    style OUT fill:#5f1e1e,color:#fff
+    style CFG fill:#22c55e,color:#111
+    style MRG fill:#22c55e,color:#111
+    style UTL fill:#22c55e,color:#111
+```
 
 ```text
 .

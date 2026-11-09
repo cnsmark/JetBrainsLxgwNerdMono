@@ -2,6 +2,38 @@
 
 本页按源码文件给出「类 / 函数」的签名、参数、返回值与行为说明。所有签名与仓库实现保持一致。
 
+### 一次完整构建的函数调用链（build_single_font）
+
+```mermaid
+sequenceDiagram
+    participant Main as build.py main()
+    participant B as build.py<br/>build_single_font()
+    participant M as merge.py
+    participant U as utils.py
+    participant FS as 文件系统
+
+    Main->>B: 对每个 style 调用
+    B->>M: merge_fonts(en_font_path, cn_font_path, config)
+    Note over M: 内部调用<br/>get_cjk_glyphs()<br/>get_cjk_cmap_entries()<br/>(循环字形) copy.deepcopy()<br/>coordinates.scale()
+    M->>U: merge_os2_ranges(base, cn)
+    M-->>B: TTFont（合并后）
+    B->>M: scale_nerd_icons(font, config)
+    Note over M: PUA 图标 1.4× 缩放<br/>Powerline 特判
+    B->>M: center_cjk_glyphs(font, config)
+    Note over M: 宽字形居中<br/>成对标点分侧
+    B->>U: update_font_names(font, ...)
+    Note over U: 内部 set_font_name() × N<br/>写 Windows + zh-CN 名称
+    B->>U: verify_glyph_width(font, [0,600,1200])
+    B->>FS: merged_font.save(<Name>-<Style>.ttf)
+    FS-->>B: OK
+    B-->>Main: str(输出路径)
+
+    style Main fill:#1e3a5f,color:#fff
+    style B fill:#f59e0b,color:#111
+    style M fill:#22c55e,color:#111
+    style U fill:#8b5cf6,color:#fff
+```
+
 ---
 
 ## 4.1 `src/config.py` · 配置类

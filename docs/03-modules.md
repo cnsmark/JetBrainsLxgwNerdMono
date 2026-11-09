@@ -35,6 +35,34 @@
 3. **并行**：`parallel <= 1` 顺序执行；否则用 `ProcessPoolExecutor` 提交每个字重，`as_completed` 收集结果，任一失败则抛出。
 4. **manifest**：构建结束后写 `output/fonts/fonts-manifest.json`，供验证页使用。
 
+**内部流程**
+
+```mermaid
+flowchart TD
+    A["load_config<br/>config.yaml"] --> B["get_config_value<br/>合并 CLI > YAML > 默认"]
+    B --> C["构造 FontConfig"]
+    C --> D["遍历 styles 配置<br/>校验样式键 / 源字体存在"]
+    D --> E{"parallel > 1 ?"}
+    E -->|否| F["循环调用<br/>build_single_font()"]
+    E -->|是| G["ProcessPoolExecutor<br/>每个字重一个子进程"]
+    F --> H["fonts-manifest.json"]
+    G --> H
+    H --> I["构建完成"]
+
+    subgraph S["build_single_font 内部"]
+        direction LR
+        S1["merge_fonts"] --> S2["scale_nerd_icons"]
+        S2 --> S3["center_cjk_glyphs"]
+        S3 --> S4["update_font_names"]
+        S4 --> S5["verify_glyph_width"]
+        S5 --> S6["merged_font.save()"]
+    end
+
+    style A fill:#3b82f6,color:#fff
+    style H fill:#22c55e,color:#111
+    style S fill:#fbbf24,color:#111,stroke-width:2px
+```
+
 ## 3.3 `split.py` — Web 字体编排层
 
 **职责边界**：不修改字形，只调用外部 Node 工具做子集拆分，并对生成的 CSS 做文本级增强。
@@ -55,6 +83,27 @@
 - 样式识别使用 `STYLE_KEYS = ["MediumItalic", "BoldItalic", "Medium", "Italic", "Bold", "Regular"]`（长名优先）。
 - 由样式推导 `--css.fontWeight` / `--css.fontStyle`，并固定 `--css.fontDisplay swap`、`--renameOutputFont [index].[ext]`。
 - 单个字重拆分失败仅记录错误，不中断其余字重。
+
+**内部流程**
+
+```mermaid
+flowchart TD
+    A["main() 解析参数<br/>--input-dir / --output-dir"] --> B{"cn-font-split<br/>已安装?"}
+    B -->|否| X["RuntimeError"]
+    B -->|是| C["split_all_fonts()<br/>glob *.ttf"]
+    C --> D["对每个 TTF<br/>split_font()"]
+    D --> E["识别 style_key<br/>STYLE_KEYS 长名优先"]
+    E --> F["推导 fontWeight / fontStyle"]
+    F --> G["subprocess 调用<br/>cn-font-split run"]
+    G --> H["enhance_local_font_matching()<br/>local('Family') → 多 local()"]
+    H --> I["收集输出目录"]
+    I --> J["generate_merged_css()<br/>all.css @import 汇总"]
+    J --> K["拆分完成"]
+
+    style A fill:#3b82f6,color:#fff
+    style X fill:#ef4444,color:#fff
+    style K fill:#22c55e,color:#111
+```
 
 ## 3.4 `src/config.py` — 运行期配置对象
 
@@ -93,6 +142,83 @@
 2. 缩放前需确保 `xMin` 已计算（必要时 `recalcBounds`），否则包围盒为空导致定位错误。
 3. `cmap` 更新必须遍历**所有** Unicode 子表（platform 3 enc 1/10 与 platform 0），而非仅 `getBestCmap()`；`format=4` 表只能容纳 BMP（≤ U+FFFF）。
 4. 深拷贝 `copy.deepcopy` 避免污染源字体对象。
+
+**`merge_fonts` 核心内部逻辑**
+
+```mermaid
+flowchart TD
+    subgraph Input["输入"]
+        B["Base Font<br/>JetBrains Mono NerdFont<br/>glyf / hmtx / cmap / hhea / OS/2"]
+        CN["CN Font<br/>LXGW<br/>glyf / cmap"]
+        C["FontConfig<br/>cn_width=1200<br/>en_width=600<br/>visual_scale=1.08"]
+    end
+
+    subgraph Step1["1. 准备"]
+        G1["get_cjk_glyphs()<br/>筛出 CJK 字形名集合"]
+        G2["get_cjk_cmap_entries()<br/>码位 → 字形名"]
+        SCALE["combined_scale<br/>= (base_upm/cn_upm)<br/>× visual_scale"]
+    end
+
+    subgraph Step2["2. 拷贝与缩放（逐字形循环）"]
+        LOOP{"字形已存在<br/>于 base?"}
+        DEEP["copy.deepcopy(cn_glyf[name])"]
+        EXISTS["跳过"]
+        RECALC["recalcBounds()"]
+        COORD["coordinates.scale(combined_scale)"]
+        WIDTH["hmtx[name]=(1200, scaled_lsb)"]
+        LOOP -->|是| EXISTS
+        LOOP -->|否| DEEP
+        DEEP --> RECALC --> COORD --> WIDTH
+    end
+
+    subgraph Step3["3. 表级更新"]
+        GO["setGlyphOrder()<br/>maxp.numGlyphs"]
+        CMAP["遍历所有 cmap 子表<br/>回填 CJK 码位"]
+        HHEA["hhea.advanceWidthMax=1200"]
+        OS2["merge_os2_ranges(base, cn)"]
+    end
+
+    B --> Step1
+    CN --> Step1
+    C --> SCALE
+    Step1 --> Step2
+    Step2 --> Step3
+    Step3 --> OUT["返回合并后的<br/>base_font"]
+
+    style Input fill:#1e3a5f,color:#fff,stroke:#60a5fa
+    style Step1 fill:#3b82f6,color:#fff
+    style Step2 fill:#f59e0b,color:#111,stroke-width:2px
+    style Step3 fill:#22c55e,color:#111,stroke-width:2px
+    style OUT fill:#065f46,color:#fff
+```
+
+**后处理函数的几何操作**
+
+```mermaid
+flowchart LR
+    subgraph scale["scale_nerd_icons()"]
+        direction TB
+        P1["Powerline U+E0A0–U+E0DF"]
+        P2["普通 PUA 图标"]
+        P1A["只水平居中<br/>保持纵向边界"]
+        P2A["1.4× 缩放<br/>水平 + 垂直双居中"]
+        P1 --> P1A
+        P2 --> P2A
+    end
+
+    subgraph center["center_cjk_glyphs()"]
+        direction TB
+        L["左标点【「（<br/>右对齐 ideal_lsb=1200-w"]
+        R["右标点】」）<br/>左对齐 ideal_lsb=0"]
+        W["宽字形 w>600<br/>居中 ideal_lsb=(1200-w)/2"]
+        N["窄字形 w≤600<br/>跳过"]
+    end
+
+    scale --> center
+
+    style scale fill:#0f172a,color:#e2e8f0
+    style center fill:#0f172a,color:#e2e8f0
+```
 
 ## 3.6 `src/utils.py` — 基础能力模块
 

@@ -2,6 +2,67 @@
 
 本页覆盖：环境准备 → 放置源字体 → 构建 TTF → 拆分 Web 字体 → 可视化验证 → 产物说明 → 常见问题。
 
+## 0 · 端到端流水线总览
+
+```mermaid
+flowchart TD
+    subgraph IN["输入"]
+        F1["fonts/<br/>JetBrains Mono NerdFont TTF"]
+        F2["fonts/<br/>LXGW 霞鹜 TTF"]
+        C["config.yaml"]
+    end
+
+    subgraph PYENV["环境准备"]
+        PY["Python ≥ 3.10"]
+        UV["uv sync"]
+        NODE{"要拆 Web 字体?"}
+        NODE -->|是| NPM["npm install -g<br/>cn-font-split"]
+    end
+
+    subgraph BUILD["阶段 1：构建 TTF"]
+        BP["uv run python build.py"]
+        BP --> SINGLE["对每个字重<br/>merge_fonts → scale_nerd_icons<br/>→ center_cjk_glyphs → update_font_names"]
+    end
+
+    subgraph TTF_OUT["产物"]
+        T1["output/fonts/<br/>*.ttf × 6 字重"]
+        M["fonts-manifest.json"]
+    end
+
+    subgraph SPLIT["阶段 2：拆分为 WOFF2（可选）"]
+        SP["uv run python split.py"]
+        SP --> CS["cn-font-split run<br/>subprocess 调用"]
+    end
+
+    subgraph WEB_OUT["产物"]
+        T2["output/split/<br/>*/result.css + *.woff2"]
+        ACSS["all.css 汇总"]
+    end
+
+    subgraph VERIFY["阶段 3：可视化验证"]
+        SERVER["uv run python -m http.server 8000"]
+        V1["verify-2-1.html<br/>fetch manifest<br/>动态注入 @font-face"]
+        V2["verify-2-1-split.html<br/>&lt;link&gt; 加载 all.css"]
+    end
+
+    IN --> PYENV
+    PYENV --> BUILD
+    C --> BUILD
+    BUILD --> TTF_OUT
+    TTF_OUT --> SPLIT
+    SPLIT --> WEB_OUT
+    TTF_OUT --> VERIFY
+    WEB_OUT --> VERIFY
+
+    style IN fill:#1e3a5f,color:#fff
+    style PYENV fill:#3b82f6,color:#fff
+    style BUILD fill:#f59e0b,color:#111,stroke-width:2px
+    style SPLIT fill:#8b5cf6,color:#fff
+    style VERIFY fill:#22c55e,color:#111,stroke-width:2px
+    style TTF_OUT fill:#065f46,color:#fff
+    style WEB_OUT fill:#065f46,color:#fff
+```
+
 ## 7.1 环境要求
 
 | 依赖 | 版本 | 必需性 | 说明 |
@@ -95,6 +156,37 @@ docker run --rm \
 - 挂载点：`/app/fonts`（输入）、`/app/output`（输出）；
 - 默认入口：`build.py --fonts-dir /app/fonts --output-dir /app/output`，追加参数会透传给 `build.py`。
 
+**Docker 构建流程**
+
+```mermaid
+flowchart LR
+    subgraph HOST["宿主机"]
+        HFONTS["./fonts"]
+        HOUT["./output"]
+        HB["docker build<br/>-t jetbrains-lxgw-nerd-mono ."]
+        HR["docker run<br/>-v fonts /fonts<br/>-v output /output"]
+    end
+
+    subgraph IMG["镜像内"]
+        PY["python:3.11-slim"]
+        UV["pip install uv"]
+        SYNC["uv sync --no-dev"]
+        DEFAULT["ENTRYPOINT<br/>uv run python build.py"]
+    end
+
+    HFONTS --> HR
+    HOUT --> HR
+    HB --> IMG
+    PY --> UV --> SYNC --> DEFAULT
+    HR -->|"挂载 /app/fonts"| DEFAULT
+    HR -->|"挂载 /app/output"| DEFAULT
+    DEFAULT -->|"产出"| HOUT
+
+    style HOST fill:#3b82f6,color:#fff
+    style IMG fill:#f59e0b,color:#111
+    style DEFAULT fill:#22c55e,color:#111
+```
+
 ## 7.5 拆分 Web 字体（WOFF2）
 
 ```bash
@@ -168,6 +260,30 @@ uv run python -m http.server 8000
 验证方法：页面中每行末尾的 `|` 竖线应逐行严格对齐——这证明「1 个汉字 = 2 个英文字符宽」。页面顶部可切换字重。
 
 > ⚠️ **必须通过 HTTP 访问**：验证页用 `fetch` 读取 `fonts-manifest.json`，`file://` 协议会因 CORS 失败。若确实直接打开，页面会进入 `fallbackMode()` 使用内置字重列表兜底（可能无法加载实际文件）。
+
+**验证页的数据流（TTF 版）**
+
+```mermaid
+sequenceDiagram
+    participant User as 用户浏览器
+    participant Page as verify-2-1.html
+    participant Srv as http.server
+    participant TTF as output/fonts/*.ttf
+    participant M as fonts-manifest.json
+
+    User->>Srv: GET verify-2-1.html
+    Srv-->>User: HTML + 内联 JS
+    User->>Page: init() 执行
+    Page->>M: fetch('output/fonts/fonts-manifest.json')
+    M-->>Page: { family_name, version, fonts[] }
+    loop 每个字重
+        Page->>Page: injectFontFaces()<br/>动态 @font-face<br/>font-family = Family-Style<br/>src = url(<file>.ttf)
+    end
+    Page->>Page: populateSelect()
+    User->>Page: 切换字重下拉
+    Page->>Page: applyFont()<br/>修改 displayText.fontFamily
+    User->>Page: 观察 | 竖线对齐
+```
 
 ## 7.8 常见问题（FAQ）
 

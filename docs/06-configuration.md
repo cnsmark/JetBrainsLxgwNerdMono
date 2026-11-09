@@ -4,6 +4,26 @@
 
 ## 6.1 优先级规则
 
+```mermaid
+flowchart LR
+    subgraph P1["最高优先级<br/>CLI --参数"]
+        CLI["--styles<br/>--fonts-dir<br/>--output-dir<br/>--parallel"]
+    end
+    subgraph P2["次优先级<br/>config.yaml"]
+        YAML["build.styles / build.parallel<br/>fonts_dir<br/>build.output_dir<br/>font.* / width.* / styles.*"]
+    end
+    subgraph P3["兜底<br/>代码内默认"]
+        DEF["样式=全部键<br/>并行=1<br/>fonts=fonts<br/>output=output/fonts"]
+    end
+
+    CLI -->|"覆盖"| YAML
+    YAML -->|"缺失时使用"| DEF
+
+    style P1 fill:#ef4444,color:#fff
+    style P2 fill:#f59e0b,color:#111
+    style P3 fill:#3b82f6,color:#fff
+```
+
 ```text
 命令行参数（CLI）  >  config.yaml  >  代码内默认值
 ```
@@ -161,6 +181,70 @@ width:
   en_width: 600
   cn_width: 1200
   visual_scale: 1.08
+```
+
+## 6.8 配置影响面总览
+
+下图展示每个配置段影响的代码模块、处理阶段与最终产物。
+
+```mermaid
+flowchart TD
+    subgraph Y["config.yaml 字段"]
+        YF["font.*<br/>family_name / version / author ..."]
+        YS["styles.*<br/>en_font / cn_font / display_name"]
+        YD["fonts_dir"]
+        YB["build.*<br/>styles / output_dir / parallel"]
+        YW["width.*<br/>en_width / cn_width / visual_scale"]
+        YC["cjk_ranges<br/>（代码默认）"]
+    end
+
+    subgraph BP["build.py 编排"]
+        B1["load_config + 参数合并"]
+        B2["校验样式/文件存在"]
+        B3["构造 FontConfig"]
+    end
+
+    subgraph MRG["src/merge.py"]
+        M1["merge_fonts<br/>CJK 拷贝 / 缩放 / 设宽"]
+        M2["scale_nerd_icons<br/>图标缩放"]
+        M3["center_cjk_glyphs<br/>CJK 居中"]
+    end
+
+    subgraph UTL["src/utils.py"]
+        U1["update_font_names<br/>写 name 表"]
+        U2["merge_os2_ranges"]
+        U3["verify_glyph_width"]
+    end
+
+    subgraph OUT["产物"]
+        O1["TTF 文件<br/>字体几何 + 元数据"]
+        O2["fonts-manifest.json"]
+    end
+
+    YF --> B1
+    YS --> B1
+    YD --> B1
+    YB --> B1
+    YW --> B3
+    YC --> B3
+    B1 --> B2 --> B3
+    B3 --> MRG
+    B3 --> U3
+    MRG --> UTL
+    UTL --> OUT
+    MRG --> OUT
+
+    style Y fill:#0f172a,color:#e2e8f0,stroke:#64748b
+    style BP fill:#3b82f6,color:#fff
+    style MRG fill:#f59e0b,color:#111
+    style UTL fill:#22c55e,color:#111
+    style OUT fill:#065f46,color:#fff
+
+    YW -.->|"visual_scale"| M1
+    YW -.->|"cn_width"| M2
+    YW -.->|"cn_width"| M3
+    YC -.->|"筛选 CJK"| M1
+    YF -.->|"family_name / version"| U1
 ```
 
 ## 6.9 相关文档

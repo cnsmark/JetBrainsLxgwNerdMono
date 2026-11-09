@@ -8,6 +8,44 @@
 
 ## 文档目录
 
+```mermaid
+mindmap
+  root((JetBrainsLxgwNerdMono<br/>Code Wiki))
+    01 · 项目概览
+      定位 / 核心特性
+      技术栈 / 目录结构
+      适用场景
+    02 · 整体架构
+      四层分层架构图
+      构建主流程 / 时序
+      Web 拆分流程
+      数据流与产物
+    03 · 模块职责
+      build.py / split.py
+      src/merge.py
+      src/utils.py / src/config.py
+      验证页前端模块
+    04 · 关键类与函数 API
+      FontConfig 数据类
+      merge_fonts / scale_nerd_icons
+      center_cjk_glyphs / update_font_names
+      split.py 子函数
+    05 · 依赖关系
+      Python / 标准库
+      工具链（uv / cn-font-split）
+      源字体依赖
+      模块依赖图
+    06 · 配置说明
+      config.yaml 全字段
+      优先级规则
+      字重映射 / 宽度
+    07 · 构建与运行
+      uv / Docker 构建
+      Web 字体拆分
+      2:1 验证页
+      产物结构 / FAQ
+```
+
 | 文档 | 内容 |
 | --- | --- |
 | [01 · 项目概览](./01-overview.md) | 定位、核心特性、技术栈、目录结构 |
