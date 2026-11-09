@@ -118,6 +118,91 @@ sequenceDiagram
     B->>FS: 写 fonts-manifest.json
 ```
 
+### 时序图：三个后处理函数内部调用
+
+下图展开 `scale_nerd_icons`、`center_cjk_glyphs`、`update_font_names` 三个函数的**内部细节**（它们在 `build_single_font` 中被依次调用）。`merge_fonts` 的深度调用链见 [04 · 关键类与函数 API 的图 C](./04-api-reference.md#图-c--merge_fonts-内部深度调用链)。
+
+```mermaid
+sequenceDiagram
+    participant B as build.py<br/>build_single_font
+    participant SN as merge.py<br/>scale_nerd_icons
+    participant CC as merge.py<br/>center_cjk_glyphs
+    participant UN as utils.py<br/>update_font_names
+    participant SFN as utils.py<br/>set_font_name
+    participant TTF as fontTools<br/>(glyf / hmtx / cmap / name)
+    participant GCG as merge.py<br/>get_cjk_glyphs
+
+    rect rgb(34, 197, 94)
+        Note over B,TTF: ① scale_nerd_icons — Nerd Font PUA 图标处理
+        B->>SN: scale_nerd_icons(merged_font, config)
+        SN->>TTF: glyf=font["glyf"], hmtx=font["hmtx"],<br/>cmap=font["cmap"].getBestCmap()
+        SN->>SN: nerd_glyph_map = {glyph_name: codepoint}<br/>筛选 U+E000–U+F8FF / U+F0000–U+FFFFD
+        alt Powerline U+E0A0–U+E0DF
+            loop 每个 Powerline 字形
+                SN->>TTF: glyph.recalcBounds(glyf)
+                SN->>TTF: 只水平坐标 translate((delta_x, 0))<br/>glyph.recalcBounds(glyf)
+                SN->>TTF: hmtx[glyph] = (1200, ideal_lsb)
+            end
+        else 普通 PUA 图标
+            loop 每个普通图标
+                SN->>TTF: glyph.recalcBounds(glyf)
+                SN->>TTF: glyph.coordinates.scale((1.4, 1.4))<br/>glyph.recalcBounds(glyf)
+                SN->>TTF: coordinates.translate((delta_x, delta_y))<br/>水平居中 + 垂直对齐 y=360<br/>glyph.recalcBounds(glyf)
+                SN->>TTF: hmtx[glyph] = (1200, ideal_lsb)
+            end
+        end
+        SN-->>B: None（就地修改 font）
+    end
+
+    rect rgb(139, 92, 246)
+        Note over B,TTF: ② center_cjk_glyphs — CJK 在 1200 宽内定位
+        B->>CC: center_cjk_glyphs(merged_font, config)
+        CC->>TTF: glyf=font["glyf"], hmtx=font["hmtx"],<br/>cmap=font["cmap"].getBestCmap()
+        CC->>GCG: get_cjk_glyphs(font, config)
+        GCG->>TTF: cmap.getBestCmap() → 遍历 is_cjk_codepoint
+        GCG-->>CC: cjk_glyphs: Set[str]
+        loop 每个 CJK 字形
+            CC->>TTF: glyph.recalcBounds(glyf)
+            alt 左标点【「（…
+                CC->>TTF: coordinates.translate((1200-w-xMin, 0))
+            else 右标点】」）…
+                CC->>TTF: coordinates.translate((-xMin, 0))
+            else 宽字形 w>600
+                CC->>TTF: coordinates.translate(((1200-w)/2 - xMin, 0))
+            else 窄字形 w≤600
+                CC->>CC: 跳过
+            end
+            CC->>TTF: glyph.recalcBounds(glyf)
+            CC->>TTF: hmtx[glyph] = (1200, ideal_lsb)
+        end
+        CC-->>B: None
+    end
+
+    rect rgb(249, 115, 22)
+        Note over B,TTF: ③ update_font_names — 批量写 name 表
+        B->>UN: update_font_names(font, family_name, style_name,<br/>full_name, postscript_name, version_str, ...)
+        UN->>UN: unique_id = f"Version X;JBLXGW;{postscript}"
+
+        loop 英文 (lang_id=0x409, mac=True)
+            UN->>SFN: set_font_name(font, value, name_id)
+            SFN->>TTF: font["name"].removeNames(nameID=name_id)
+            SFN->>TTF: name.setName(value, platformID=3, platEncID=1, langID=0x409)
+            SFN->>TTF: name.setName(value, platformID=1, platEncID=0, langID=0)
+        end
+
+        loop zh-CN (lang_id=0x804, mac=False)
+            UN->>SFN: set_font_name(font, value, name_id,<br/>mac=False, lang_id=0x804)
+            SFN->>TTF: font["name"].setName(value, platformID=3, platEncID=1, langID=0x804)
+        end
+        UN-->>B: None
+    end
+
+    style SN fill:#22c55e,color:#111
+    style CC fill:#8b5cf6,color:#fff
+    style UN fill:#f59e0b,color:#111
+    style TTF fill:#3b82f6,color:#fff
+```
+
 ## 2.4 Web 字体拆分流程（split.py）
 
 ```mermaid

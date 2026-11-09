@@ -2,36 +2,243 @@
 
 本页按源码文件给出「类 / 函数」的签名、参数、返回值与行为说明。所有签名与仓库实现保持一致。
 
-### 一次完整构建的函数调用链（build_single_font）
+---
+
+## 4.0 · 完整调用链时序图（源码级）
+
+本节的三张时序图**严格按 build.py → merge.py → utils.py 的真实函数调用关系**绘制，与仓库实现一致。建议按顺序阅读：
+
+1. [图 A · main() 全局编排](#图-a--main-全局编排)：展示 `main()` 从 CLI 到 `build_single_font`、并行调度、manifest 生成的完整流程
+2. [图 B · build_single_font 完整链路](#图-b--build_single_font-完整链路)：展示单个字重构建的 6 步流水线，明确每个函数的入参与返回值
+3. [图 C · merge_fonts 内部深度调用链](#图-c--merge_fonts-内部深度调用链)：展开最复杂的 `merge_fonts`，包含它对 `get_cjk_glyphs`、`get_cjk_cmap_entries`、`is_cjk_codepoint`、`merge_os2_ranges` 的调用
+
+### 图 A · `main()` 全局编排
 
 ```mermaid
 sequenceDiagram
-    participant Main as build.py main()
-    participant B as build.py<br/>build_single_font()
-    participant M as merge.py
-    participant U as utils.py
-    participant FS as 文件系统
+    participant CLI as CLI 参数<br/>argparse
+    participant M as build.py main()
+    participant LC as build.py<br/>load_config()
+    participant GV as build.py<br/>get_config_value()×N
+    participant FC as src/config.py<br/>FontConfig
+    participant BP as build.py<br/>build_single_font()
+    participant MPG as ProcessPoolExecutor
+    participant J as json
 
-    Main->>B: 对每个 style 调用
-    B->>M: merge_fonts(en_font_path, cn_font_path, config)
-    Note over M: 内部调用<br/>get_cjk_glyphs()<br/>get_cjk_cmap_entries()<br/>(循环字形) copy.deepcopy()<br/>coordinates.scale()
-    M->>U: merge_os2_ranges(base, cn)
-    M-->>B: TTFont（合并后）
-    B->>M: scale_nerd_icons(font, config)
-    Note over M: PUA 图标 1.4× 缩放<br/>Powerline 特判
-    B->>M: center_cjk_glyphs(font, config)
-    Note over M: 宽字形居中<br/>成对标点分侧
-    B->>U: update_font_names(font, ...)
-    Note over U: 内部 set_font_name() × N<br/>写 Windows + zh-CN 名称
-    B->>U: verify_glyph_width(font, [0,600,1200])
-    B->>FS: merged_font.save(<Name>-<Style>.ttf)
-    FS-->>B: OK
-    B-->>Main: str(输出路径)
+    CLI->>M: --config --styles --fonts-dir --output-dir --parallel
+    M->>LC: load_config(config_path)
+    LC-->>M: yaml_config dict
+    loop 多次读取嵌套键
+        M->>GV: get_config_value(yaml_config, *keys, default)
+        GV-->>M: 叶子值 或 default
+    end
 
-    style Main fill:#1e3a5f,color:#fff
+    rect rgb(30, 58, 95)
+        Note over M,FC: 构造 FontConfig 数据类
+        M->>FC: FontConfig(family_name, version,<br/>visual_scale, en_width=600,<br/>cn_width=1200)
+        FC-->>M: config 对象
+    end
+
+    M->>M: 校验样式键 / 源字体文件存在
+    M->>M: font_paths[style] = {en_font_path,<br/>cn_font_path, display_name}
+    M->>M: output_dir.mkdir(parents=True, exist_ok=True)
+
+    alt parallel <= 1 顺序构建
+        loop 每个 style
+            M->>BP: build_single_font(style,<br/>en_font_path, cn_font_path,<br/>display_name, output_dir,<br/>config, metadata)
+            BP-->>M: str(output_path)
+        end
+    else parallel > 1 多进程并行
+        M->>MPG: ProcessPoolExecutor(max_workers=parallel)
+        loop 每个 style
+            M->>MPG: executor.submit(build_single_font, ...)
+        end
+        loop as_completed
+            MPG-->>M: future.result()
+        end
+    end
+
+    rect rgb(34, 197, 94)
+        Note over M,J: 生成 fonts-manifest.json
+        M->>M: manifest = {family_name, version,<br/>fonts:[{style, display_name,<br/>filename}]}
+        M->>J: json.dump(manifest, indent=2)
+        J-->>M: 写入 output/fonts/fonts-manifest.json
+    end
+
+    style CLI fill:#f59e0b,color:#111
+    style M fill:#3b82f6,color:#fff
+    style BP fill:#22c55e,color:#111
+    style MPG fill:#8b5cf6,color:#fff
+    style J fill:#22c55e,color:#111
+```
+
+### 图 B · `build_single_font` 完整链路（单字重构建）
+
+```mermaid
+sequenceDiagram
+    participant B as build.py<br/>build_single_font
+    participant MF as merge.py<br/>merge_fonts
+    participant SN as merge.py<br/>scale_nerd_icons
+    participant CC as merge.py<br/>center_cjk_glyphs
+    participant UN as utils.py<br/>update_font_names
+    participant VG as utils.py<br/>verify_glyph_width
+    participant FT as fontTools.TTFont
+
+    B->>MF: merge_fonts(base_font_path=str(en),<br/>cn_font_path=str(cn), config)
+    Note right of MF: (详见图 C)
+    MF-->>B: merged_font: TTFont
+
+    B->>SN: scale_nerd_icons(merged_font, config)
+    Note right of SN: glyf/coordinates.scale(1.4)<br/>hmtx[glyph] = (1200, ideal_lsb)<br/>Powerline 只水平居中
+
+    B->>CC: center_cjk_glyphs(merged_font, config)
+    Note right of CC: (内部再调 get_cjk_glyphs)<br/>glyph.coordinates.translate((delta,0))<br/>左标点右对齐 / 右标点左对齐
+
+    rect rgb(124, 58, 237)
+        Note over B,UN: update_font_names 批量写 18+ 个 NameID
+        B->>UN: update_font_names(font=merged_font,<br/>family_name, style_name,<br/>full_name, postscript_name,<br/>version_str="Version X",<br/>author, copyright_str,<br/>description, url,<br/>license_desc, license_url)
+        loop NameID 0..14 + 16 + 17
+            UN->>UN: set_font_name(font, value, name_id)
+            UN->>FT: font["name"].removeNames(nameID=name_id)<br/>font["name"].setName(..., platformID=3, platEncID=1, langID=0x409)
+            FT-->>UN: OK
+            opt mac=True and lang_id==0x409
+                UN->>FT: font["name"].setName(..., platformID=1, platEncID=0, langID=0)
+            end
+        end
+        loop zh-CN(0x804): NameID 1/2/4/16/17
+            UN->>UN: set_font_name(font, value, name_id,<br/>mac=False, lang_id=0x804)
+        end
+    end
+
+    opt 异常捕获
+        B->>VG: verify_glyph_width(font=merged_font,<br/>expected_widths=[0,600,1200],<br/>file_name=postscript_name)
+        loop 遍历 font.getGlyphOrder()
+            VG->>VG: hmtx[name] = (width, lsb)<br/>if width not in [0,600,1200]:
+        end
+        alt 全部合规
+            VG-->>B: OK (print Verified)
+        else 存在异常字宽
+            VG-->>B: raise ValueError (捕获后仅 Warning)
+        end
+    end
+
+    B->>FT: merged_font.save(str(output_path))
+    FT-->>B: 写入 .ttf
+    B->>FT: merged_font.close()
+    B-->>B: return str(output_path)
+
     style B fill:#f59e0b,color:#111
-    style M fill:#22c55e,color:#111
-    style U fill:#8b5cf6,color:#fff
+    style MF fill:#22c55e,color:#111,stroke-width:2px
+    style SN fill:#22c55e,color:#111
+    style CC fill:#22c55e,color:#111
+    style UN fill:#8b5cf6,color:#fff
+    style VG fill:#8b5cf6,color:#fff
+```
+
+### 图 C · `merge_fonts` 内部深度调用链
+
+```mermaid
+sequenceDiagram
+    participant MF as merge.py<br/>merge_fonts
+    participant TTF as fontTools.TTFont
+    participant GCG as merge.py<br/>get_cjk_glyphs
+    participant GCE as merge.py<br/>get_cjk_cmap_entries
+    participant IU as utils.py<br/>is_cjk_codepoint
+    participant MOR as utils.py<br/>merge_os2_ranges
+    participant CN as copy.deepcopy
+
+    MF->>TTF: TTFont(base_font_path)
+    TTF-->>MF: base_font
+    MF->>TTF: TTFont(cn_font_path)
+    TTF-->>MF: cn_font
+
+    MF->>MF: base_glyph_names = set(base_font.getGlyphOrder())
+
+    MF->>GCG: get_cjk_glyphs(cn_font, config)
+    GCG->>TTF: cn_font["cmap"].getBestCmap()
+    TTF-->>GCG: {codepoint: glyph_name}
+    loop 遍历 cmap 每项
+        GCG->>IU: is_cjk_codepoint(cp, config.cjk_ranges)
+        IU->>IU: for start,end in ranges:<br/>if start<=cp<=end: return True
+        IU-->>GCG: True/False
+        opt True
+            GCG->>GCG: cjk_glyphs.add(glyph_name)
+        end
+    end
+    GCG-->>MF: cjk_glyphs: Set[str]
+
+    MF->>GCE: get_cjk_cmap_entries(cn_font, config)
+    GCE->>TTF: cn_font["cmap"].getBestCmap()
+    TTF-->>GCE: {codepoint: glyph_name}
+    loop 遍历 cmap 每项
+        GCE->>IU: is_cjk_codepoint(cp, config.cjk_ranges)
+        IU-->>GCE: True/False
+        opt True
+            GCE->>GCE: entries[cp] = glyph_name
+        end
+    end
+    GCE-->>MF: cjk_cmap: dict
+
+    MF->>TTF: base_upm = base_font["head"].unitsPerEm
+    MF->>TTF: cn_upm = cn_font["head"].unitsPerEm
+    MF->>MF: combined_scale = (base_upm/cn_upm) × visual_scale
+
+    rect rgb(30, 58, 95)
+        Note over MF,CN: 逐字形：拷贝 + 缩放 + 设宽
+        loop 对每个 cjk_glyphs
+            alt glyph_name ∉ base_glyph_names<br/>且 cn_glyf.glyphs 存在
+                MF->>CN: copy.deepcopy(cn_glyf[glyph_name])
+                CN-->>MF: glyph
+                opt 有 contours 且 xMin 未计算
+                    MF->>TTF: glyph.recalcBounds(base_glyf)
+                end
+                MF->>TTF: glyph.coordinates.scale((combined_scale, combined_scale))
+                MF->>TTF: glyph.recalcBounds(base_glyf)
+                MF->>MF: orig_width, orig_lsb = cn_hmtx[glyph_name]
+                MF->>MF: scaled_lsb = int(orig_lsb * combined_scale)
+                MF->>TTF: base_hmtx.metrics[glyph_name] = (1200, scaled_lsb)
+                MF->>MF: glyphs_added.append(glyph_name)
+            end
+        end
+    end
+
+    opt glyphs_added 非空
+        MF->>TTF: base_font.setGlyphOrder(<原顺序> + glyphs_added)
+        MF->>TTF: base_font["maxp"].numGlyphs = len(new_glyph_order)
+
+        rect rgb(34, 197, 94)
+            Note over MF,TTF: 更新所有 cmap 子表（Office/Excel 需要 format=4）
+            loop base_font["cmap"].tables
+                alt platformID==3 encID==1/10<br/>或 platformID==0
+                    loop 每个新增字形的 cjk_cmap[cp]
+                        opt table.format==4 and codepoint<=0xFFFF
+                            MF->>TTF: table.cmap[codepoint] = glyph_name
+                        end
+                    end
+                end
+            end
+        end
+
+        MF->>TTF: base_font["hhea"].advanceWidthMax = max(原最大, 1200)
+        MF->>TTF: base_font["hhea"].numberOfHMetrics = len(base_hmtx.metrics)
+    end
+
+    MF->>MOR: merge_os2_ranges(base_font, cn_font)
+    opt 两者都有 OS/2 表
+        MOR->>MOR: base.ulUnicodeRange1..4 |= source.ulUnicodeRange1..4
+        MOR->>MOR: base.ulCodePageRange1..2 |= source.ulCodePageRange1..2
+    end
+
+    MF->>TTF: cn_font.close()
+    MF-->>B: return base_font（已被修改）
+
+    style MF fill:#22c55e,color:#111,stroke-width:2px
+    style GCG fill:#16a34a,color:#fff
+    style GCE fill:#16a34a,color:#fff
+    style IU fill:#8b5cf6,color:#fff
+    style MOR fill:#8b5cf6,color:#fff
+    style TTF fill:#3b82f6,color:#fff
+    style CN fill:#f59e0b,color:#111
 ```
 
 ---
